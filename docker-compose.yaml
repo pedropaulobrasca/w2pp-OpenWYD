@@ -80,6 +80,10 @@ services:
       - "/Release"
       - "-status-addr"
       - ":80"
+      - "-ws-addr"
+      - ":8282"
+      - "-ws-origins"
+      - "${W2PP_WS_ORIGINS:-localhost:5173,127.0.0.1:5173}"
       - "-client-version"
       - "12000"
     depends_on:
@@ -91,6 +95,7 @@ services:
       - ./Release:/Release:ro   # content tree (rates/catalogs/maps), validated at boot
     ports:
       - "8281:8281"            # TMSrv CPSock client edge (game)
+      - "8282:8282"            # same CPSock stream over WebSocket, for the browser client
       - "80:80"                # channel-status HTTP (serv00.htm), real WYD uses :80
 
 volumes:
