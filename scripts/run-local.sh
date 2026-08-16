@@ -33,14 +33,22 @@ else
 fi
 
 # Best-effort LAN IP of this host (the address the Windows client dials).
+# Every branch ends in `|| true`: under `set -e` a failing probe (e.g. macOS,
+# where `hostname -I` is an invalid option) would abort the whole script before
+# it printed anything.
 lan_ip() {
 	if command -v ip >/dev/null 2>&1; then
-		ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'
+		ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true
+	elif command -v ipconfig >/dev/null 2>&1; then
+		# macOS: ask the interface behind the default route for its address.
+		local iface
+		iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}') || true
+		[ -n "$iface" ] && ipconfig getifaddr "$iface" 2>/dev/null || true
 	else
-		hostname -I 2>/dev/null | awk '{print $1}'
+		hostname -I 2>/dev/null | awk '{print $1}' || true
 	fi
 }
-HOST_IP=$(lan_ip)
+HOST_IP=$(lan_ip || true)
 [ -n "$HOST_IP" ] || HOST_IP="<this-machine-LAN-IP>"
 
 echo "==> Building and starting the stack (db, dbserver, binserver, tmserver)…"
