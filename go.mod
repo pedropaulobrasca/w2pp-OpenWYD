@@ -3,6 +3,7 @@ module github.com/jeanluca/w2pp-openwyd
 go 1.25.13
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.10.0
 	golang.org/x/crypto v0.53.0
 	google.golang.org/grpc v1.82.1

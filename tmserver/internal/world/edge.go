@@ -44,9 +44,33 @@ func (w *World) handleConn(c net.Conn) {
 
 	// CPSock: hand to the loop, replaying the peeked bytes via the buffered reader.
 	w.log.Info("cpsock connection", "ip", ip, "first4", fmt.Sprintf("% x", pre))
-	if !w.emit(connectEvent{conn: &prefixConn{Conn: c, r: br}, ip: ip}) {
+	w.AcceptConn(&prefixConn{Conn: c, r: br}, ip)
+}
+
+// AcceptConn hands an already-established byte stream to the loop as a new
+// CPSock session, exactly like a connection off the TCP accept loop. It exists
+// for edges that terminate their own transport before the CPSock stream begins
+// — the WebSocket edge (browser clients cannot open raw TCP) — so those edges
+// stay outside the world package and share this single entry point.
+//
+// ip is what the session reports as its address; a proxying edge should pass
+// the remote peer it observed. Returns false when the loop is shutting down, in
+// which case c is closed for the caller.
+func (w *World) AcceptConn(c net.Conn, ip string) bool {
+	// Check the stop signal before emitting: the event queue is buffered, so a
+	// send can still succeed after shutdown (select would pick either case) and
+	// the connection would sit in a queue nobody drains.
+	select {
+	case <-w.done:
 		_ = c.Close()
+		return false
+	default:
 	}
+	if !w.emit(connectEvent{conn: c, ip: ip}) {
+		_ = c.Close()
+		return false
+	}
+	return true
 }
 
 // isHTTPMethod reports whether the leading bytes look like an HTTP request. The

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/jeanluca/w2pp-openwyd/tmserver/internal/route"
 	"github.com/jeanluca/w2pp-openwyd/tmserver/internal/world"
 	"github.com/jeanluca/w2pp-openwyd/tmserver/internal/worldcfg"
+	"github.com/jeanluca/w2pp-openwyd/tmserver/internal/wsedge"
 )
 
 func main() {
@@ -109,6 +111,8 @@ func run(logger *slog.Logger) error {
 		defStatusAddr = ":80"
 	}
 	statusAddr := flag.String("status-addr", defStatusAddr, "HTTP channel-status listen address (serv00.htm); real WYD serves status on :80, separate from the game port. Empty disables")
+	wsAddr := flag.String("ws-addr", os.Getenv("W2PP_WS_ADDR"), "WebSocket client-edge listen address for browser clients (same CPSock stream as the TCP edge). Empty disables")
+	wsOrigins := flag.String("ws-origins", os.Getenv("W2PP_WS_ORIGINS"), "comma-separated browser origins allowed on -ws-addr (e.g. play.example.com,*.example.com). Empty = same-origin only")
 	clientVersion := flag.Int("client-version", envInt("W2PP_CLIENT_VERSION", 7640), "MSG_AccountLogin.ClientVersion the client must send (protocol-spec says 7640; this 7662 'Cavaleiros de Kersef' build sends 12000)")
 	doubleExp := flag.Bool("double-exp", envBool("W2PP_DOUBLE_EXP", false), "DOUBLEMODE: double PvE experience (gameconfig double)")
 	newbieEvent := flag.Bool("newbie-event", envBool("W2PP_NEWBIE_EVENT", false), "NewbieEventServer: +15% exp and newbie under-100 bonus (gameconfig)")
@@ -346,6 +350,13 @@ func run(logger *slog.Logger) error {
 		go serveStatusHTTP(ctx, *statusAddr, statusFile, logger)
 	}
 
+	// WebSocket client edge: a browser cannot open the raw TCP game socket, so
+	// the same CPSock stream is offered over WebSocket for the web client. Off
+	// unless -ws-addr is set; put TLS (wss://) in front of it in production.
+	if *wsAddr != "" {
+		go serveWebSocketEdge(ctx, *wsAddr, splitOrigins(*wsOrigins), w, logger)
+	}
+
 	// Populate the world with NPCs/monsters from NPCGener.txt (before Serve starts
 	// the loop, so spawning is single-threaded). Capped to fit the mob slots. When
 	// the DB overlay is active, merchant blocks are skipped here (owned by
@@ -578,6 +589,37 @@ func serveStatusHTTP(ctx context.Context, addr, statusFile string, logger *slog.
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Warn("status server stopped", "err", err)
 	}
+}
+
+// serveWebSocketEdge runs the browser-facing client edge: it upgrades incoming
+// requests and hands each resulting stream to the world exactly like a TCP
+// CPSock connection (tmserver/internal/wsedge).
+func serveWebSocketEdge(ctx context.Context, addr string, origins []string, w *world.World, logger *slog.Logger) {
+	srv := &http.Server{Addr: addr, Handler: wsedge.Handler(wsedge.Config{
+		Acceptor:       w,
+		Log:            logger,
+		AllowedOrigins: origins,
+	})}
+	go func() { <-ctx.Done(); _ = srv.Close() }()
+	logger.Info("websocket edge listening", "addr", addr, "origins", origins)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Warn("websocket edge stopped", "err", err)
+	}
+}
+
+// splitOrigins parses the -ws-origins list, dropping blanks so a trailing comma
+// (or an unset variable) does not become an empty pattern that matches nothing.
+func splitOrigins(list string) []string {
+	if list == "" {
+		return nil
+	}
+	var out []string
+	for _, o := range strings.Split(list, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // loadContent loads and validates the Release/ content tree (Fase 5 loaders).
